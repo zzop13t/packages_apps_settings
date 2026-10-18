@@ -7163,6 +7163,9 @@
 
     <!-- [CHAR_LIMIT=40] Battery percentage: Title -->
     <string name="battery_percentage">Battery percentage</string>
+    <!-- Double-tap the status bar to turn off the screen -->
+    <string name="status_bar_double_tap_to_sleep_title">Double-tap status bar to sleep</string>
+    <string name="status_bar_double_tap_to_sleep_summary">Turn off the screen by double-tapping the status bar</string>
     <!-- [CHAR_LIMIT=NONE] Battery percentage: Description for preference -->
     <string name="battery_percentage_description">Show battery percentage in status bar</string>
 
