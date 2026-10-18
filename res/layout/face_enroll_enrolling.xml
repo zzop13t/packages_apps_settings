@@ -48,6 +48,16 @@
                     android:layout_height="wrap_content"
                     android:contentDescription="@null" />
 
+                <!-- Surface the face HAL renders the enrollment preview into, used when
+                     config_face_enroll_hal_owns_camera is set. Hidden by default and revealed
+                     once the page transition settles. -->
+                <SurfaceView
+                    android:id="@+id/surface_view"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:visibility="gone"
+                    android:contentDescription="@null" />
+
                 <ImageView
                     android:id="@+id/circle_view"
                     android:layout_width="match_parent"

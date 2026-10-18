@@ -18,6 +18,7 @@ package com.android.settings.biometrics.face;
 
 import android.app.settings.SettingsEnums;
 import android.content.Context;
+import android.content.pm.ActivityInfo;
 import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
@@ -34,13 +35,18 @@ import android.util.Log;
 import android.util.Size;
 import android.util.TypedValue;
 import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.TextureView;
 import android.view.View;
 import android.widget.ImageView;
 
+import androidx.annotation.Nullable;
+
 import com.android.settings.R;
 import com.android.settings.biometrics.BiometricEnrollSidecar;
 import com.android.settings.core.InstrumentedPreferenceFragment;
+
 
 import java.util.Arrays;
 
@@ -56,6 +62,10 @@ public class FaceEnrollPreviewFragment extends InstrumentedPreferenceFragment
     private static final int MAX_PREVIEW_WIDTH = 1920;
     private static final int MAX_PREVIEW_HEIGHT = 1080;
 
+    // How long to wait for the page transition before revealing the HAL preview surface,
+    // in case the enter animation callback never arrives.
+    private static final long PREVIEW_REVEAL_FALLBACK_MS = 600;
+
     private Handler mHandler = new Handler(Looper.getMainLooper());
     private CameraManager mCameraManager;
     private String mCameraId;
@@ -65,6 +75,13 @@ public class FaceEnrollPreviewFragment extends InstrumentedPreferenceFragment
     private CaptureRequest mPreviewRequest;
     private Size mPreviewSize;
     private ParticleCollection.Listener mListener;
+
+    // True when the face HAL is the camera owner and renders into a surface we hand over.
+    private boolean mHalOwnsCamera;
+    private Surface mPreviewSurface;
+    private SurfaceView mSurfaceView;
+    private Runnable mSurfaceReadyListener;
+    private boolean mPreviewRevealed;
 
     // View used to contain the circular cutout and enrollment animation drawable
     private ImageView mCircleView;
@@ -81,6 +98,23 @@ public class FaceEnrollPreviewFragment extends InstrumentedPreferenceFragment
         @Override
         public void onEnrolled() {
             mListener.onEnrolled();
+        }
+    };
+
+    private final SurfaceHolder.Callback mSurfaceHolderCallback = new SurfaceHolder.Callback() {
+        @Override
+        public void surfaceCreated(SurfaceHolder holder) {
+            mPreviewSurface = holder.getSurface();
+            notifySurfaceReady();
+        }
+
+        @Override
+        public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        }
+
+        @Override
+        public void surfaceDestroyed(SurfaceHolder holder) {
+            mPreviewSurface = null;
         }
     };
 
@@ -187,6 +221,8 @@ public class FaceEnrollPreviewFragment extends InstrumentedPreferenceFragment
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        mHalOwnsCamera = getResources().getBoolean(R.bool.config_face_enroll_hal_owns_camera);
+
         mTextureView = getActivity().findViewById(R.id.texture_view);
         mCircleView = getActivity().findViewById(R.id.circle_view);
 
@@ -196,12 +232,76 @@ public class FaceEnrollPreviewFragment extends InstrumentedPreferenceFragment
         mAnimationDrawable = new FaceEnrollAnimationDrawable(getContext(), mAnimationListener);
         mCircleView.setImageDrawable(mAnimationDrawable);
 
+        if (mHalOwnsCamera) {
+            // The face HAL owns the camera and renders into a surface we hand over. Opening the
+            // camera from here as well would make the HAL fail with "camera in use".
+            getActivity().setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LOCKED);
+
+            // The HAL renders into a SurfaceView buffer instead of our TextureView.
+            mTextureView.setVisibility(View.GONE);
+
+            mSurfaceView = getActivity().findViewById(R.id.surface_view);
+            mSurfaceView.getHolder().addCallback(mSurfaceHolderCallback);
+            // Pin the surface to a size the HAL supports.
+            mSurfaceView.getHolder().setFixedSize(
+                    getResources().getInteger(R.integer.face_preview_width),
+                    getResources().getInteger(R.integer.face_preview_height));
+
+            // The preview surface is an opaque layer that is not affected by the page's enter
+            // animation, so keep it hidden until the page has settled.
+            mSurfaceView.postDelayed(this::revealSurface, PREVIEW_REVEAL_FALLBACK_MS);
+            return;
+        }
+
         mCameraManager = (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);
+    }
+
+    /**
+     * Reveals the HAL-owned preview surface once the page transition is done.
+     */
+    public void revealSurface() {
+        if (!mHalOwnsCamera || mSurfaceView == null || mPreviewRevealed) {
+            return;
+        }
+        mPreviewRevealed = true;
+        mSurfaceView.setVisibility(View.VISIBLE);
+    }
+
+    /**
+     * @return the surface the face HAL should render the preview into, or {@code null} when the
+     *         framework owns the camera.
+     */
+    @Nullable
+    public Surface getPreviewSurface() {
+        return mHalOwnsCamera ? mPreviewSurface : null;
+    }
+
+    /**
+     * Registers a callback to be run once the preview surface exists. Runs immediately if it is
+     * already available.
+     */
+    public void setSurfaceReadyListener(@Nullable Runnable listener) {
+        mSurfaceReadyListener = listener;
+        notifySurfaceReady();
+    }
+
+    private void notifySurfaceReady() {
+        if (mPreviewSurface == null || mSurfaceReadyListener == null) {
+            return;
+        }
+        final Runnable listener = mSurfaceReadyListener;
+        mSurfaceReadyListener = null;
+        listener.run();
     }
 
     @Override
     public void onResume() {
         super.onResume();
+
+        if (mHalOwnsCamera) {
+            // The HAL owns the camera, nothing to preview from here.
+            return;
+        }
 
         // When the screen is turned off and turned back on, the SurfaceTexture is already
         // available, and "onSurfaceTextureAvailable" will not be called. In that case, we can open
@@ -272,6 +372,10 @@ public class FaceEnrollPreviewFragment extends InstrumentedPreferenceFragment
      * @param height The height of the texture view
      */
     private void openCamera(int width, int height) {
+        if (mHalOwnsCamera || mCameraManager == null) {
+            // The HAL owns the camera; do not fight it for the device.
+            return;
+        }
         try {
             setUpCameraOutputs();
             mCameraManager.openCamera(mCameraId, mCameraStateCallback, mHandler);

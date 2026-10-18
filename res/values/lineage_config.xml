@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     SPDX-FileCopyrightText: The LineageOS Project
+     SPDX-License-Identifier: Apache-2.0
+-->
+<resources>
+    <!-- Whether the face HAL owns the camera and renders the enrollment preview into a
+         surface provided by Settings. When true, Settings must not open the camera itself:
+         both consumers would fight over the same device and the HAL would fail with
+         "camera in use", leaving enrollment without frames. -->
+    <bool name="config_face_enroll_hal_owns_camera">false</bool>
+
+    <!-- Size of the surface handed over to the face HAL. Must match a size the HAL supports. -->
+    <integer name="face_preview_width">1080</integer>
+    <integer name="face_preview_height">1080</integer>
+</resources>
